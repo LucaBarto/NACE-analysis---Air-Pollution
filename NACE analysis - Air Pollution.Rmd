@@ -1,0 +1,758 @@
+---
+title: "Air emissions accounts by NACE Rev. 2 activity"
+author: "Luca Bartolomei"
+date: "_`r format(Sys.Date(), '%d %B, %Y')`_"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+  pdf_document:
+    df_print: kable
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    fig_caption: yes
+    extra_dependencies: subfig
+    highlight: tango
+classoption: a4paper
+fig_height: 5
+fig_width: 5
+fontsize: 10pt
+latex_engine: xelatex
+mainfont: Arial
+mathfont: LiberationMono
+monofont: DejaVu Sans Mono
+include-before: '`\newpage{}`{=latex}'
+urlcolor: blue
+---
+
+\newpage
+
+# **Introduction**
+
+This project aims to analyze the contribution of each ***NACE rev 2 activity on polluting emissions***.
+
+We are going to filter data for Italy and select "Tonnes" as unit of measure
+
+All data used for the analysis comes from ***Eurostat***.
+
+The ***eurostat package*** will be used to read the data from ***Eurostat***
+
+Let's start by extracting the data for each sector. Subsequently,
+the data will be filtered to take into consideration only those relating to Italy.
+Subsequently, the data will be grouped on an annual basis
+
+After extracting all the important data, a grouping of the data relating to Air emissions accounts will be carried out by macro sectors.
+The aim is to identify macro sectors for which emissions are increasing.
+
+The results at the Italian level will be compared with the European ones.
+
+After that will focus on these macro sectors:
+
+* Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use
+* Human health activities
+* Mining and quarrying 
+* Wholesale and retail trade; repair of motor vehicles and motorcycles 
+
+In the second part of the project we will analyze the deaths in Italy caused by lung diseases.
+An analysis will be performed based on gender and age groups.
+
+We are going to consider these categories of diseases
+
+*	Pneumonia
+*	Chronic lower respiratory diseases
+*	Asthma and status asthmaticus
+*	Other lower respiratory diseases
+*	Other diseases of the respiratory system
+
+\newpage
+
+# **Definition**
+
+***Mining and quarrying***
+Mining and quarrying in the form of the extraction of minerals and materials occurring naturally as solids (coal, ores, gravel, sand, salt), liquids (petroleum), gases (natural gas) or biomass (peat). Extraction can be achieved by different methods such as underground or surface mining or extraction, well operation etc.
+
+
+***Human health activities***
+This division includes activities of short- or long-term hospitals, general or specialty medical, surgical, psychiatric
+and substance abuse hospitals, sanatoria, preventoria, medical nursing homes, asylums, mental hospital institutions,
+rehabilitation centres, leprosaria and other human health institutions which have accommodation facilities and which engage
+in providing diagnostic and medical treatment to inpatients with any of a wide variety of medical conditions.
+
+It also includes medical consultation and treatment in the field of general and specialised medicine by general practitioners
+and medical specialists and surgeons. It includes dental practice activities of a general or specialised nature
+and orthodontic activities. Additionally, this division includes activities for human health not performed by hospitals or
+by practicing medical doctors but by paramedical practitioners legally recognised to treat patients.
+
+
+***Wholesale and retail trade; repair of motor vehicles and motorcycles***
+This division includes all activities (except manufacture and rental) related to motor vehicles and motorcycles, including lorries and trucks, such as the wholesale and retail sale of new and second-hand vehicles, the repair and maintenance of vehicles and the wholesale and retail sale of parts and accessories for motor vehicles and motorcycles. Also included are activities of commission agents involved in wholesale or retail sale of vehicles.
+
+This division also includes activities such as washing, polishing of vehicles etc.
+
+
+***Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use***
+This division includes the undifferentiated subsistence goods-producing and services-producing activities of households. Households should be classified here only if it is impossible to identify a primary activity for the subsistence activities of the household. If the household engages in market activities, it should be classified according to the primary market activity carried out.
+
+\newpage
+
+# **Data exploration**
+
+```{r Install libraries, include=FALSE, message=FALSE, echo=FALSE}
+# Install all the necessary libraries
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(eurostat)) install.packages("eurostat", repos = "http://cran.us.r-project.org")
+if(!require(fpp2)) install.packages("fpp2", repos = "http://cran.us.r-project.org")
+if(!require(plotly)) install.packages("plotly", repos = "http://cran.us.r-project.org")
+if(!require(xts)) install.packages("xts", repos = "http://cran.us.r-project.org")
+if(!require(seastests)) install.packages("seastests", repos = "http://cran.us.r-project.org")
+if(!require(tsbox)) install.packages("tsbox", repos = "http://cran.us.r-project.org")
+
+library(dplyr)     #For data wrangling
+library(lubridate) #For handling dates
+library(ggplot2)   #For plotting of results
+library(eurostat) # package used for querrying EUROSTAT
+library(fpp2) # package used for forecasting
+library(plotly) #interactive plotting
+library(xts) # To handle time-based data
+library(seastests) #Test for time series seasonality
+library(tsbox) #convert time series stored as ts, xts, data.frame, data.table, tibble, zoo, tsibble, tibbletime or timeSeries to each other
+```
+
+```{r Air emissions accounts by NACE Rev. 2 activity, include=FALSE, message=FALSE, echo=FALSE}
+dt_air_emission_original <- get_eurostat("env_ac_ainah_r2", stringsAsFactors = FALSE)
+
+dt_air_emission <- dt_air_emission_original %>% filter(geo == 'IT') %>%
+  filter(unit == 'T')
+
+dt_air_emission <- dt_air_emission %>% mutate(year = year(time))
+
+dt_air_emission <- dt_air_emission %>% select(airpol, nace_r2, year, values)
+
+dt_air_emission <- dt_air_emission %>% group_by(year, nace_r2, airpol) %>% 
+  mutate(air_emission_values = sum(values)) %>%
+  ungroup()
+
+dt_air_emission <- dt_air_emission %>% 
+                   select(year, nace_r2, airpol, air_emission_values) %>%
+                   distinct()
+```
+
+Let's find trend for every macro sector and select the ones with increasing tren
+
+```{r Analyze air pollution for macro sector, include=FALSE, message=FALSE, echo=FALSE}
+air_pollution_nace_sector <- function(ds, nace_sector) {
+  dt <- ds %>% filter(nace_r2 == nace_sector) %>% 
+    group_by(year) %>% 
+    mutate(value = sum(air_emission_values)) %>%
+    ungroup()
+  
+  dt <- dt %>% select(year, value)
+  
+  p <- dt %>%
+    ggplot( aes(year, value)) +
+    geom_smooth(formula = y ~ x, method = "lm") +
+    geom_line() +
+    theme_bw()
+  
+  ggplotly(p)
+}
+```
+
+**Agriculture, forestry and fishing**
+```{r Agriculture, forestry and fishing, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'A')
+```
+
+**Mining and quarrying**
+```{r Mining and quarrying, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'B')
+```
+
+**Manufacturing**
+```{r Manufacturing, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'C')
+```
+
+**Electricity, gas, steam and air conditioning supply**
+```{r Electricity, gas, steam and air conditioning supply, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'D')
+```
+
+**Water supply; sewerage, waste management and remediation activities**
+```{r Water supply; sewerage, waste management and remediation activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'E')
+```
+
+**Construction**
+```{r Construction, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'F')
+```
+
+**Wholesale and retail trade; repair of motor vehicles and motorcycles**
+```{r Wholesale and retail trade; repair of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'G')
+```
+
+**Transportation and storage**
+```{r Transportation and storage, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'H')
+```
+
+**Accommodation and food service activities**
+```{r Accommodation and food service activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'I')
+```
+
+**Information and communication**
+```{r Information and communication, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'J')
+```
+
+**Financial and insurance activities**
+```{r Financial and insurance activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'K')
+```
+
+**Real estate activities**
+```{r Real estate activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'L')
+```
+
+**Professional, scientific and technical activities**
+```{r Professional, scientific and technical activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'M')
+```
+
+**Administrative and support service activities**
+```{r Administrative and support service activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'N')
+```
+
+**Public administration and defence; compulsory social security**
+```{r Public administration and defence; compulsory social security, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'O')
+```
+
+**Education**
+```{r Education, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'P')
+```
+
+**Human health and social work activities**
+```{r Human health and social work activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'Q')
+```
+
+**Arts, entertainment and recreation**
+```{r Arts, entertainment and recreation, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'R')
+```
+
+**Other service activities**
+```{r Other service activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'S')
+```
+
+**Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use**
+```{r Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'T')
+```
+
+**Activities of extraterritorial organisations and bodies**
+```{r Activities of extraterritorial organisations and bodies, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'U')
+```
+
+**All NACE activities plus households**
+```{r All NACE activities plus households, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'TOTAL_HH')
+```
+
+\newpage
+
+# **Analysis on sectors with increasing trend**
+
+```{r Europe data, include=FALSE, message=FALSE, echo=FALSE}
+dt_air_emission_eu <- dt_air_emission_original %>% 
+  filter(geo == 'EU28') %>% 
+  filter(unit == 'T')
+
+dt_air_emission_eu <- dt_air_emission_eu %>% mutate(year = year(time))
+
+dt_air_emission_eu <- dt_air_emission_eu %>% select(airpol, nace_r2, year, values)
+
+dt_air_emission_eu <- dt_air_emission_eu %>% group_by(year, nace_r2, airpol) %>% 
+  mutate(air_emission_values = sum(values)) %>%
+  ungroup()
+
+dt_air_emission_eu <- dt_air_emission_eu %>% 
+  select(year, nace_r2, airpol, air_emission_values) %>%
+  distinct()
+```
+
+```{r Detail analysis, include=FALSE, message=FALSE, echo=FALSE}
+air_pollution_detail_nace_sector <- function(ds, nace_sector) {
+  dt <- ds %>% filter(nace_r2 == nace_sector)
+  
+  colnames(dt)<- c("Year","Sector", "Component", "Value")
+  
+  dt <- dt %>% select(Year, Component, Value)
+  
+  p <- dt %>%
+    ggplot( aes( Year, Value, color=Component)) +
+    geom_line() +
+    theme_bw()
+  
+  ggplotly(p)
+}
+
+air_pollution_component_detail <- function(ds, component, nace_sector) {
+  dt <- ds %>% filter(nace_r2 == nace_sector)
+  
+  colnames(dt)<- c("Year","Sector", "Component", "Value")
+  
+  dt <- dt %>% select(Year, Component, Value)
+  
+  dt <- dt %>% filter(Component == component)
+  
+  p <- dt %>%
+    ggplot( aes( Year, Value)) +
+    geom_smooth(formula = y ~ x, method = "lm") +
+    geom_line() +
+    theme_bw()
+  
+  ggplotly(p)
+}
+```
+
+Let's go deeper on sectors with increasing trend
+
+## **Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use details**
+
+**Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use**
+```{r Details Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission, 'T')
+air_pollution_component_detail(dt_air_emission, 'HFC_CO2E', 'T')
+```
+
+Hydrofluorocarbones (CO2 equivalent) (HFC_CO2E) is the most pollutant component with an increasing trend
+
+**Compare with Europe**
+```{r Europe Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission_eu, 'T')
+air_pollution_component_detail(dt_air_emission_eu, 'HFC_CO2E', 'T')
+```
+
+Greenhouse gases (GHG) is the most pollutant component.
+Anyway also Hydrofluorocarbones (CO2 equivalent) has an increasing trend
+
+\newpage
+
+## **Human health and social work activities details**
+
+**Human health activities**
+```{r Human health activities, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'Q86')
+```
+
+**Residential care activities and social work activities without accommodation**
+```{r Residential care activities and social work activities without accommodation, echo=FALSE}
+air_pollution_nace_sector(dt_air_emission, 'Q87_Q88')
+```
+
+The trend of ***Human health and social work activities*** is increasing. Instead the trend of ***Residential care activities and social work activities without accommodation*** is deacrising, so we're focusing on the first one.
+
+
+**Human health activities details**
+```{r Detail Human health activities, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission, 'Q86')
+air_pollution_component_detail(dt_air_emission, 'GHG', 'Q86')
+air_pollution_component_detail(dt_air_emission, 'CO2', 'Q86')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, both with an increasing trend
+
+**Compare with Europe**
+```{r Europe Human health activities, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission_eu, 'Q86')
+air_pollution_component_detail(dt_air_emission_eu, 'GHG', 'Q86')
+air_pollution_component_detail(dt_air_emission_eu, 'CO2', 'Q86')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components. The trend of Greenhouse gases is almost flat, instead the one of Carbon dioxide is clearly increasing
+
+\newpage
+
+## **Mining and quarrying details**
+
+**Mining and quarrying details**
+```{r Details Mining and quarrying, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission, 'B')
+air_pollution_component_detail(dt_air_emission, 'GHG', 'B')
+air_pollution_component_detail(dt_air_emission, 'CO2', 'B')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, both with an increasing trend
+
+**Compare with Europe**
+```{r Europe Mining and quarrying, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission_eu, 'B')
+air_pollution_component_detail(dt_air_emission_eu, 'GHG', 'B')
+air_pollution_component_detail(dt_air_emission_eu, 'CO2', 'B')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, both with a decreasing trend
+
+\newpage
+
+## **Wholesale and retail trade; repair of motor vehicles and motorcycles details**
+
+**Wholesale and retail trade; repair of motor vehicles and motorcycles details**
+```{r Details Wholesale and retail trade; repair of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission, 'G')
+air_pollution_component_detail(dt_air_emission, 'HFC_CO2E', 'G')
+```
+
+Greenhouse gases (GHG) is the most pollutant component, but the trend is almost flat. Instead Hydrofluorocarbones (CO2 equivalent) (HFC_CO2E) has an increasing trend
+
+**Compare with Europe**
+```{r Europe Wholesale and retail trade; repair of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission_eu, 'G')
+air_pollution_component_detail(dt_air_emission_eu, 'GHG', 'G')
+air_pollution_component_detail(dt_air_emission_eu, 'HFC_CO2E', 'G')
+```
+
+Both Greenhouse gases (GHG) and Hydrofluorocarbones (CO2 equivalent) (HFC_CO2E) have a decreasing trend
+
+Analyze the singular components
+
+**Wholesale and retail trade and repair of motor vehicles and motorcycles details**
+```{r Details Wholesale and retail trade and repair of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission, 'G45')
+air_pollution_component_detail(dt_air_emission, 'GHG', 'G45')
+air_pollution_component_detail(dt_air_emission, 'CO2', 'G45')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, but both with a decreasing trend
+
+**Compare with Europe**
+```{r Europe Wholesale and retail trade and repair of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission_eu, 'G45')
+air_pollution_component_detail(dt_air_emission_eu, 'GHG', 'G45')
+air_pollution_component_detail(dt_air_emission_eu, 'CO2', 'G45')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, but both with a decreasing trend
+
+
+**Wholesale trade, except of motor vehicles and motorcycles details**
+```{r Details Wholesale trade, except of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission, 'G46')
+air_pollution_component_detail(dt_air_emission, 'GHG', 'G46')
+air_pollution_component_detail(dt_air_emission, 'HFC_CO2E', 'G46')
+```
+
+Greenhouse gases (GHG) and Hydrofluorocarbones (CO2 equivalent) (HFC_CO2E) are the most pollutant components, both with an increasing trend
+
+**Compare with Europe**
+```{r Wholesale trade, except of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission_eu, 'G46')
+air_pollution_component_detail(dt_air_emission_eu, 'GHG', 'G46')
+air_pollution_component_detail(dt_air_emission_eu, 'CO2', 'G46')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, but both with a decreasing trend
+
+
+**Retail trade, except of motor vehicles and motorcycles details**
+```{r Retail trade, except of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission, 'G47')
+air_pollution_component_detail(dt_air_emission, 'GHG', 'G47')
+air_pollution_component_detail(dt_air_emission, 'CO2', 'G47')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, but both with a decreasing trend
+
+**Compare with Europe**
+```{r Europe Retail trade, except of motor vehicles and motorcycles, echo=FALSE}
+air_pollution_detail_nace_sector(dt_air_emission_eu, 'G47')
+air_pollution_component_detail(dt_air_emission_eu, 'GHG', 'G47')
+air_pollution_component_detail(dt_air_emission_eu, 'CO2', 'G47')
+```
+
+Greenhouse gases (GHG) and Carbon dioxide (CO2) are the most pollutant components, but both with a decreasing trend
+
+\newpage
+
+# **Analysis by sex and age**
+
+In the second part of the project we will analyze the deaths in Italy caused by lung diseases.
+
+We start by collecting data from Eurostat database
+```{r Causes of death, echo=FALSE}
+dt_death_pneumonia_original <- get_eurostat("hlth_cd_asdr2", stringsAsFactors = FALSE)
+
+dt_death_pneumonia_it <- dt_death_pneumonia_original %>% filter(geo == 'IT')
+
+dt_death_pneumonia_it <- dt_death_pneumonia_it %>% 
+  filter(icd10 %in% c('J12-J18', 'J40-J47', 'J45_J46', 'J40-J44_J47', 'J_OTH'))
+
+dt_death_pneumonia_it <- dt_death_pneumonia_it %>% mutate(year = year(time))
+
+dt_death_pneumonia_it <- dt_death_pneumonia_it %>% select(sex, age, icd10, year, values)
+```
+
+So let's run a trend analysis of the causes of death based on sex
+
+Causes of death for women
+```{r Causes of death for women, echo=FALSE}
+dt <- dt_death_pneumonia_it %>% filter(sex == 'F')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+Causes of death for men
+```{r Causes of death for men, echo=FALSE}
+dt <- dt_death_pneumonia_it %>% filter(sex == 'M')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+The charts above show an increasing trend for women
+
+Now let's continue the analysis of the causes of death in Italy for women due to lung diseases, separating the data according to the two age groups:
+
+*	Under 65;
+*	Above 65 years old.
+
+Causes of death based for women under 65
+```{r Causes of death based for women under 65, echo=FALSE}
+dt <- dt_death_pneumonia_it %>% filter(sex == 'F') %>% filter(age == 'Y_LT65')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+Causes of death based for women over 65
+```{r Causes of death based for women over 65, echo=FALSE}
+dt <- dt_death_pneumonia_it %>% filter(sex == 'F') %>% filter(age == 'Y_GE65')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+For over 65 the trend is increasing
+
+\newpage
+
+In this last step we will analyze the causes of death for women over 65, based on the following categories of lung diseases
+
+*	Pneumonia
+*	Chronic lower respiratory diseases
+*	Asthma and status asthmaticus
+*	Other lower respiratory diseases
+*	Other diseases of the respiratory system
+
+
+```{r Women over 65, echo=FALSE}
+dt_women_over65 <- dt_death_pneumonia_it %>% 
+  filter(sex == 'F') %>% 
+  filter(age == 'Y_GE65')
+```
+
+
+**Let's analyze the Pneumonia category**
+```{r Pneumonia category, echo=FALSE}
+dt <- dt_women_over65 %>% filter(icd10 == 'J12-J18')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+The trend is increasing
+
+**Let's analyze the Chronic lower respiratory category**
+```{r Chronic lower respiratory category, echo=FALSE}
+dt <- dt_women_over65 %>% filter(icd10 == 'J40-J47')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+Also in this case the trend is increasing
+
+**Let's analyze the Asthma and status asthmaticus category**
+```{r Asthma and status asthmaticus category, echo=FALSE}
+dt <- dt_women_over65 %>% filter(icd10 == 'J45_J46')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+Also in this case the trend is increasing, but less then other categories
+
+**Let's analyze the Other lower respiratory diseases category**
+```{r Other lower respiratory diseases category, echo=FALSE}
+dt <- dt_women_over65 %>% filter(icd10 == 'J40-J44_J47')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+Also in this case the trend is increasing
+
+**Let's analyze the Other diseases of the respiratory system category**
+```{r Other diseases of the respiratory system category, echo=FALSE}
+dt <- dt_women_over65 %>% filter(icd10 == 'J_OTH')
+
+dt <- dt %>% select(year, values)
+
+dt <- dt %>% group_by(year) %>% 
+  mutate(values = sum(values)) %>%
+  ungroup()
+
+dt <- dt %>% select(year, values) %>% distinct()
+
+p <- dt %>%
+  ggplot( aes(year, values)) +
+  geom_smooth(formula = y ~ x, method = "lm") +
+  geom_line() +
+  theme_bw()
+
+ggplotly(p)
+```
+
+Also in this case the trend is increasing, but less then other categories
+
+\newpage
+# **Conclusion**
+We analyzed polluting emissions by NACE activities for Italy. We selected the activities with an increasing trend.
+For these we have identified the most important components and then we have compared them with the European average.
+We have identified these macro sectors with an increasing trend
+
+* Activities of households as employers; undifferentiated goods- and services-producing activities of households for own use
+* Human health activities
+* Mining and quarrying 
+* Wholesale and retail trade; repair of motor vehicles and motorcycles 
+
+The most polluting components, both at the Italian and European level, are the following:
+
+* Carbon dioxide (CO2)
+* Greenhouse gases (GHG)
+* Hydrofluorocarbones (CO2 equivalent) (HFC_CO2E)
+
+In some specific cases the behavior and the Italian trend do not correspond with that at the European level.
+Ultimately, where the trend in Italy is increasing, the correspondent in Europe is not the same, or even decreasing as for the ***Mining and quarrying*** and ***Wholesale and retail trade; repair of motor vehicles and motorcycles*** sectors.
+
+In the last part we analyzed the causes of death in Italy linked to lung diseases.
+The data show a growing trend for women, especially those over 65.
+The trend is substantially growing for all categories of lung diseases.
